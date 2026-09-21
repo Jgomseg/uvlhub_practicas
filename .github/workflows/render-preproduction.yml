@@ -1,0 +1,85 @@
+name: Deploy to Render (Pre-production)
+
+# ─────────────────────────────────────────────────────────────
+# Despliegue Continuo (CD) en pre-producción sobre Render.
+# Cubre las modificaciones de la Práctica 1:
+#   1) Desplegar SOLO si un pull request ha sido aprobado y
+#      mergeado a main.
+#   2) Desplegar SOLO si todas las pruebas han pasado.
+#
+# "aprobado" → regla de protección de rama en main
+# ("Require a pull request review before merging").
+# "mergeado" → github.event.pull_request.merged == true
+#
+# Secret necesario en GitHub:
+#   RENDER_DEPLOY_HOOK_URL_PRE → Deploy Hook de pre-producción
+# ─────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+jobs:
+
+  test:
+    name: Run tests
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-24.04
+
+    services:
+      mariadb:
+        image: mariadb:12.0.2
+        env:
+          MARIADB_ROOT_PASSWORD: uvlhub_root_password
+          MARIADB_DATABASE: uvlhubdb_test
+          MARIADB_USER: uvlhub_user
+          MARIADB_PASSWORD: uvlhub_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -u root -p$MARIADB_ROOT_PASSWORD"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ./rosemary
+
+      - name: Run tests
+        run: pytest app/features/ --ignore-glob='*selenium*'
+        env:
+          FLASK_ENV: testing
+          MARIADB_HOSTNAME: 127.0.0.1
+          MARIADB_PORT: 3306
+          MARIADB_TEST_DATABASE: uvlhubdb_test
+          MARIADB_USER: uvlhub_user
+          MARIADB_PASSWORD: uvlhub_password
+
+  deploy:
+    name: Deploy to Render
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v5
+
+      - name: Trigger Render deploy
+        env:
+          deploy_url: ${{ secrets.RENDER_DEPLOY_HOOK_URL_PRE }}
+        run: |
+          curl --fail "$deploy_url"
